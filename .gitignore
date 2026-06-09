@@ -1,0 +1,11 @@
+build/
+data/
+*.gz
+*.ITCH50
+*.exe
+*.o
+*.obj
+__pycache__/
+*.pyc
+analysis/book_data.csv
+
