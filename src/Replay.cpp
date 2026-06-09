@@ -6,6 +6,16 @@
 #include <sstream>
 #include <unordered_map>
 
+struct SymbolState {
+    std::ofstream csv;
+    uint64_t      msg_count    = 0;
+    double        prev_bid_qty = 0;
+    double        prev_ask_qty = 0;
+    OrderBook     book;
+    ReplayStats   stats;
+    std::unordered_map<uint64_t, Order> live_orders;
+};
+
 ReplayStats Replay::run(const std::string& filepath,
                         const std::string& symbol,
                         bool verbose)
@@ -16,26 +26,42 @@ ReplayStats Replay::run(const std::string& filepath,
         return {};
     }
 
-    // CSV output for Python analytics
-    std::ofstream csv("../analysis/book_data.csv");
-    csv << "msg_count,best_bid,best_ask,spread,mid_price,"
-        << "bid_qty,ask_qty,ofi\n";
+    const std::vector<std::string> ALL_SYMBOLS = {
+        "AAPL", "MSFT", "INTC", "GOOG", "CSCO",
+        "FB",   "AMZN", "TSLA", "NVDA", "NFLX"
+    };
 
-    double prev_bid_qty = 0;
-    double prev_ask_qty = 0;
-    uint64_t aapl_msg_count = 0;
+    std::vector<std::string> tracked;
+    if (symbol == "ALL") {
+        tracked = ALL_SYMBOLS;
+    } else {
+        tracked = { symbol };
+    }
+
+    std::unordered_map<std::string, SymbolState> states;
+    for (const auto& sym : tracked) {
+        auto& s = states[sym];
+        std::string csv_path = "../analysis/" + sym + "_book_data.csv";
+        s.csv.open(csv_path);
+        if (!s.csv.is_open()) {
+            std::cerr << "ERROR: Cannot open CSV: " << csv_path << "\n";
+            return {};
+        }
+        s.csv << "msg_count,best_bid,best_ask,spread,mid_price,"
+              << "bid_qty,ask_qty,ofi\n";
+    }
+
     const uint64_t SNAPSHOT_EVERY = 500;
-
-    OrderBook book;
-    ReplayStats stats;
-
-    std::unordered_map<uint64_t, Order> live_orders;
 
     uint8_t len_buf[2];
     uint8_t msg_buf[64];
+    uint64_t total_messages = 0;
 
     std::cout << "Starting replay: " << filepath << "\n";
-    std::cout << "Filtering symbol: " << symbol << "\n\n";
+    if (symbol == "ALL")
+        std::cout << "Tracking all 10 symbols\n\n";
+    else
+        std::cout << "Filtering symbol: " << symbol << "\n\n";
 
     while (file.read(reinterpret_cast<char*>(len_buf), 2)) {
         uint16_t msg_len = (len_buf[0] << 8) | len_buf[1];
@@ -48,11 +74,11 @@ ReplayStats Replay::run(const std::string& filepath,
         if (!file.read(reinterpret_cast<char*>(msg_buf), msg_len))
             break;
 
-        stats.total_messages++;
+        total_messages++;
 
-        if (stats.total_messages % 1000000 == 0)
+        if (total_messages % 1000000 == 0)
             std::cout << "  Processed "
-                      << stats.total_messages / 1000000
+                      << total_messages / 1000000
                       << "M messages...\n";
 
         ITCHMessageType type = ITCHParser::getType(msg_buf);
@@ -63,10 +89,13 @@ ReplayStats Replay::run(const std::string& filepath,
             auto msg = ITCHParser::parseAddOrder(msg_buf);
             std::string stock(msg.stock);
             stock.erase(stock.find_last_not_of(' ') + 1);
-            if (stock != symbol) continue;
 
-            stats.add_orders++;
-            aapl_msg_count++;
+            auto it = states.find(stock);
+            if (it == states.end()) continue;
+            SymbolState& s = it->second;
+
+            s.stats.add_orders++;
+            s.msg_count++;
 
             Order order;
             order.order_id = msg.order_ref;
@@ -74,106 +103,129 @@ ReplayStats Replay::run(const std::string& filepath,
             order.price    = msg.price;
             order.quantity = msg.shares;
 
-            live_orders[msg.order_ref] = order;
-            auto fills = book.addOrder(order);
-            stats.total_fills += fills.size();
+            s.live_orders[msg.order_ref] = order;
+            auto fills = s.book.addOrder(order);
+            s.stats.total_fills += fills.size();
         }
         else if (type == ITCHMessageType::ORDER_CANCEL) {
             auto msg = ITCHParser::parseCancelOrder(msg_buf);
-            auto it  = live_orders.find(msg.order_ref);
-            if (it == live_orders.end()) continue;
 
-            stats.cancel_orders++;
-            aapl_msg_count++;
-            it->second.quantity -= msg.cancelled_shares;
+            for (auto& [sym, s] : states) {
+                auto oit = s.live_orders.find(msg.order_ref);
+                if (oit == s.live_orders.end()) continue;
 
-            if (it->second.quantity <= 0) {
-                book.cancelOrder(msg.order_ref);
-                live_orders.erase(it);
-            } else {
-                book.modifyOrder(msg.order_ref, it->second.quantity);
+                s.stats.cancel_orders++;
+                s.msg_count++;
+                oit->second.quantity -= msg.cancelled_shares;
+
+                if (oit->second.quantity <= 0) {
+                    s.book.cancelOrder(msg.order_ref);
+                    s.live_orders.erase(oit);
+                } else {
+                    s.book.modifyOrder(msg.order_ref, oit->second.quantity);
+                }
+                break;
             }
         }
         else if (type == ITCHMessageType::ORDER_DELETE) {
             auto msg = ITCHParser::parseDeleteOrder(msg_buf);
-            stats.delete_orders++;
-            aapl_msg_count++;
-            book.cancelOrder(msg.order_ref);
-            live_orders.erase(msg.order_ref);
+
+            for (auto& [sym, s] : states) {
+                if (s.live_orders.find(msg.order_ref) == s.live_orders.end())
+                    continue;
+                s.stats.delete_orders++;
+                s.msg_count++;
+                s.book.cancelOrder(msg.order_ref);
+                s.live_orders.erase(msg.order_ref);
+                break;
+            }
         }
         else if (type == ITCHMessageType::ORDER_REPLACE) {
             auto msg = ITCHParser::parseReplaceOrder(msg_buf);
-            stats.replace_orders++;
-            aapl_msg_count++;
 
-            auto it = live_orders.find(msg.old_order_ref);
-            if (it == live_orders.end()) continue;
+            for (auto& [sym, s] : states) {
+                auto oit = s.live_orders.find(msg.old_order_ref);
+                if (oit == s.live_orders.end()) continue;
 
-            Side side = it->second.side;
-            book.cancelOrder(msg.old_order_ref);
-            live_orders.erase(it);
+                s.stats.replace_orders++;
+                s.msg_count++;
 
-            Order new_order;
-            new_order.order_id = msg.new_order_ref;
-            new_order.side     = side;
-            new_order.price    = msg.price;
-            new_order.quantity = msg.shares;
+                Side side = oit->second.side;
+                s.book.cancelOrder(msg.old_order_ref);
+                s.live_orders.erase(oit);
 
-            live_orders[msg.new_order_ref] = new_order;
-            auto fills = book.addOrder(new_order);
-            stats.total_fills += fills.size();
+                Order new_order;
+                new_order.order_id = msg.new_order_ref;
+                new_order.side     = side;
+                new_order.price    = msg.price;
+                new_order.quantity = msg.shares;
+
+                s.live_orders[msg.new_order_ref] = new_order;
+                auto fills = s.book.addOrder(new_order);
+                s.stats.total_fills += fills.size();
+                break;
+            }
         }
         else {
-            stats.unknown_msgs++;
             continue;
         }
 
-        // Write CSV snapshot every N AAPL messages
-        if (aapl_msg_count % SNAPSHOT_EVERY == 0) {
-            auto bid = book.bestBid();
-            auto ask = book.bestAsk();
+        for (auto& [sym, s] : states) {
+            if (s.msg_count == 0 || s.msg_count % SNAPSHOT_EVERY != 0)
+                continue;
+
+            auto bid = s.book.bestBid();
+            auto ask = s.book.bestAsk();
 
             if (bid.has_value() && ask.has_value()) {
                 double best_bid = bid.value();
                 double best_ask = ask.value();
                 double spread   = best_ask - best_bid;
                 double mid      = (best_bid + best_ask) / 2.0;
+                double bid_qty  = s.book.bestBidQty();
+                double ask_qty  = s.book.bestAskQty();
+                double ofi      = (bid_qty - s.prev_bid_qty)
+                                - (ask_qty - s.prev_ask_qty);
 
-                // Real top-of-book quantities
-                double bid_qty = book.bestBidQty();
-                double ask_qty = book.bestAskQty();
-                double ofi     = (bid_qty - prev_bid_qty)
-                                - (ask_qty - prev_ask_qty);
+                s.csv << s.msg_count << ","
+                      << best_bid << ","
+                      << best_ask << ","
+                      << spread   << ","
+                      << mid      << ","
+                      << bid_qty  << ","
+                      << ask_qty  << ","
+                      << ofi      << "\n";
 
-                csv << aapl_msg_count << ","
-                    << best_bid << ","
-                    << best_ask << ","
-                    << spread   << ","
-                    << mid      << ","
-                    << bid_qty  << ","
-                    << ask_qty  << ","
-                    << ofi      << "\n";
-
-                prev_bid_qty = bid_qty;
-                prev_ask_qty = ask_qty;
+                s.prev_bid_qty = bid_qty;
+                s.prev_ask_qty = ask_qty;
             }
         }
     }
 
-    csv.close();
-    std::cout << "\nCSV written to analysis/book_data.csv\n";
-
-    book.print();
-
     std::cout << "\n=== REPLAY STATS ===\n";
-    std::cout << "Total messages : " << stats.total_messages  << "\n";
-    std::cout << "Add orders     : " << stats.add_orders      << "\n";
-    std::cout << "Cancels        : " << stats.cancel_orders   << "\n";
-    std::cout << "Deletes        : " << stats.delete_orders   << "\n";
-    std::cout << "Replaces       : " << stats.replace_orders  << "\n";
-    std::cout << "Total fills    : " << stats.total_fills     << "\n";
-    std::cout << "====================\n";
+    std::cout << "Total messages processed: " << total_messages << "\n\n";
 
-    return stats;
+    ReplayStats combined;
+    combined.total_messages = total_messages;
+
+    for (auto& [sym, s] : states) {
+        s.csv.close();
+        std::cout << sym << ":\n";
+        std::cout << "  Add orders : " << s.stats.add_orders     << "\n";
+        std::cout << "  Cancels    : " << s.stats.cancel_orders  << "\n";
+        std::cout << "  Deletes    : " << s.stats.delete_orders  << "\n";
+        std::cout << "  Replaces   : " << s.stats.replace_orders << "\n";
+        std::cout << "  Fills      : " << s.stats.total_fills    << "\n";
+        std::cout << "  CSV -> ../analysis/" << sym << "_book_data.csv\n\n";
+
+        combined.add_orders     += s.stats.add_orders;
+        combined.cancel_orders  += s.stats.cancel_orders;
+        combined.delete_orders  += s.stats.delete_orders;
+        combined.replace_orders += s.stats.replace_orders;
+        combined.total_fills    += s.stats.total_fills;
+    }
+
+    std::cout << "====================\n";
+    return combined;
 }
 
