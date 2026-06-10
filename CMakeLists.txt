@@ -2,9 +2,14 @@ cmake_minimum_required(VERSION 3.14)
 project(lob_engine)
 
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -Wall")
 
-# Main replay executable
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+set(CMAKE_CXX_FLAGS_DEBUG   "-g -O0 -fsanitize=address,undefined -Wall -Wextra")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -DNDEBUG -Wall")
+
 add_executable(lob
     src/main.cpp
     src/OrderBook.cpp
@@ -13,10 +18,10 @@ add_executable(lob
 )
 target_include_directories(lob PRIVATE src)
 
-# Benchmark executable
 add_executable(bench
     bench/benchmark.cpp
     src/OrderBook.cpp
 )
 target_include_directories(bench PRIVATE src)
+target_compile_options(bench PRIVATE -O3 -march=native)
 

@@ -1,5 +1,6 @@
 #include "OrderBook.hpp"
 #include <algorithm>
+#include <cstdio>
 
 std::vector<Fill> OrderBook::addOrder(Order order) {
     std::vector<Fill> fills = match(order);
@@ -23,7 +24,7 @@ std::vector<Fill> OrderBook::match(Order& incoming) {
     auto tryMatch = [&](auto& opposite_side) {
         while (incoming.quantity > 0 && !opposite_side.empty()) {
             auto it = opposite_side.begin();
-            double level_price = it->first;
+            int64_t level_price = it->first;
 
             bool crosses = (incoming.side == Side::BUY)
                 ? (incoming.price >= level_price)
@@ -122,12 +123,12 @@ bool OrderBook::modifyOrder(uint64_t order_id, uint32_t new_quantity) {
     else                      return updateLevel(asks_);
 }
 
-std::optional<double> OrderBook::bestBid() const {
+std::optional<int64_t> OrderBook::bestBid() const {
     if (bids_.empty()) return std::nullopt;
     return bids_.begin()->first;
 }
 
-std::optional<double> OrderBook::bestAsk() const {
+std::optional<int64_t> OrderBook::bestAsk() const {
     if (asks_.empty()) return std::nullopt;
     return asks_.begin()->first;
 }
@@ -146,12 +147,12 @@ void OrderBook::print() const {
     std::cout << "\n=== ORDER BOOK ===\n";
     std::cout << "ASKS:\n";
     for (auto it = asks_.rbegin(); it != asks_.rend(); ++it)
-        std::cout << "  $" << it->first
+        std::cout << "  " << tickToString(it->first)
                   << " | qty: " << it->second.total_quantity << "\n";
     std::cout << "  ---spread---\n";
     std::cout << "BIDS:\n";
     for (auto& [price, level] : bids_)
-        std::cout << "  $" << price
+        std::cout << "  " << tickToString(price)
                   << " | qty: " << level.total_quantity << "\n";
     std::cout << "==================\n";
 }

@@ -1,8 +1,6 @@
 #include "ITCHParser.hpp"
 #include <cstring>
 
-// ── Byte readers (big-endian to host) ──────────────────
-
 uint16_t ITCHParser::read16(const uint8_t* buf, int offset) {
     return (uint16_t)(buf[offset] << 8 | buf[offset+1]);
 }
@@ -34,11 +32,9 @@ uint64_t ITCHParser::read64(const uint8_t* buf, int offset) {
            ((uint64_t)buf[offset+7]);
 }
 
-double ITCHParser::readPrice(const uint8_t* buf, int offset) {
-    return read32(buf, offset) / 10000.0;
+int64_t ITCHParser::readPrice(const uint8_t* buf, int offset) {
+    return (int64_t)read32(buf, offset);  // raw fixed-point tick; divide by 10000 for display
 }
-
-// ── Message type ────────────────────────────────────────
 
 ITCHMessageType ITCHParser::getType(const uint8_t* buf) {
     switch ((char)buf[0]) {
@@ -52,18 +48,8 @@ ITCHMessageType ITCHParser::getType(const uint8_t* buf) {
     }
 }
 
-// ── Add Order (type 'A') ────────────────────────────────
-// Offset map per ITCH 5.0 spec:
-// 0      = message type (1 byte)
-// 1-2    = stock locate (2 bytes)
-// 3-4    = tracking number (2 bytes)
-// 5-10   = timestamp (6 bytes)
-// 11-18  = order ref (8 bytes)
-// 19     = side (1 byte)
-// 20-23  = shares (4 bytes)
-// 24-31  = stock (8 bytes)
-// 32-35  = price (4 bytes)
-
+// 0=type 1-2=locate 3-4=tracking 5-10=timestamp 11-18=order_ref
+// 19=side 20-23=shares 24-31=stock 32-35=price
 AddOrderMsg ITCHParser::parseAddOrder(const uint8_t* buf) {
     AddOrderMsg msg;
     msg.order_ref = read64(buf, 11);
@@ -75,22 +61,11 @@ AddOrderMsg ITCHParser::parseAddOrder(const uint8_t* buf) {
     return msg;
 }
 
-// ── Add Order with MPID (type 'F') ──────────────────────
-// Same as 'A' but has 4 extra bytes for MPID at the end
-// Offsets identical up to price
-
 AddOrderMsg ITCHParser::parseAddOrderMPID(const uint8_t* buf) {
-    return parseAddOrder(buf); // same offsets for our fields
+    return parseAddOrder(buf);
 }
 
-// ── Cancel Order (type 'X') ─────────────────────────────
-// 0      = message type
-// 1-2    = stock locate
-// 3-4    = tracking number
-// 5-10   = timestamp
-// 11-18  = order ref
-// 19-22  = cancelled shares
-
+// 0=type 1-2=locate 3-4=tracking 5-10=timestamp 11-18=order_ref 19-22=cancelled_shares
 CancelOrderMsg ITCHParser::parseCancelOrder(const uint8_t* buf) {
     CancelOrderMsg msg;
     msg.order_ref        = read64(buf, 11);
@@ -98,29 +73,15 @@ CancelOrderMsg ITCHParser::parseCancelOrder(const uint8_t* buf) {
     return msg;
 }
 
-// ── Delete Order (type 'D') ─────────────────────────────
-// 0      = message type
-// 1-2    = stock locate
-// 3-4    = tracking number
-// 5-10   = timestamp
-// 11-18  = order ref
-
+// 0=type 1-2=locate 3-4=tracking 5-10=timestamp 11-18=order_ref
 DeleteOrderMsg ITCHParser::parseDeleteOrder(const uint8_t* buf) {
     DeleteOrderMsg msg;
     msg.order_ref = read64(buf, 11);
     return msg;
 }
 
-// ── Replace Order (type 'U') ────────────────────────────
-// 0      = message type
-// 1-2    = stock locate
-// 3-4    = tracking number
-// 5-10   = timestamp
-// 11-18  = old order ref
-// 19-26  = new order ref
-// 27-30  = shares
-// 31-34  = price
-
+// 0=type 1-2=locate 3-4=tracking 5-10=timestamp 11-18=old_ref
+// 19-26=new_ref 27-30=shares 31-34=price
 ReplaceOrderMsg ITCHParser::parseReplaceOrder(const uint8_t* buf) {
     ReplaceOrderMsg msg;
     msg.old_order_ref = read64(buf, 11);
