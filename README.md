@@ -15,7 +15,7 @@ Across 10 stocks on the same feed the engine reconstructed 285,432 total trades.
 
 ## Project structure
 
-'''lob-engine/
+<pre>'''lob-engine/
 ├── src/
 │   ├── OrderBook.hpp/.cpp       core matching engine
 │   ├── ITCHParser.hpp/.cpp      NASDAQ ITCH 5.0 binary parser
@@ -27,7 +27,7 @@ Across 10 stocks on the same feed the engine reconstructed 285,432 total trades.
 │   ├── analyze.py               Python microstructure analytics
 │   └── aapl_analytics.png       output charts
 ├── data/                        ITCH data files, not committed
-└── CMakeLists.txt'''
+└── CMakeLists.txt'''</pre>
 
 ## Build
 Requires g++ 11 or later and CMake 3.14 or later.
