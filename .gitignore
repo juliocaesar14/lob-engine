@@ -2,10 +2,18 @@ build/
 data/
 *.gz
 *.ITCH50
+*.txt.gz
 *.exe
 *.o
 *.obj
+*.a
+*.dll
 __pycache__/
 *.pyc
-analysis/book_data.csv
+*.pyo
+analysis/*_book_data.csv
+analysis/*_fills.csv
+.vscode/
+Thumbs.db
+desktop.ini
 

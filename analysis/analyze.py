@@ -18,12 +18,11 @@ summary_rows = []
 
 for csv_path in csv_files:
     symbol = csv_path.replace("_book_data.csv", "")
-
     print(f"\n--- {symbol} ---")
+
     df = pd.read_csv(csv_path)
     print(f"  Loaded {len(df)} snapshots")
 
-    # Fix: divide by 10000 to convert fixed-point integers to dollars
     df['best_bid']  = df['best_bid']  / 10000
     df['best_ask']  = df['best_ask']  / 10000
     df['spread']    = df['spread']    / 10000
@@ -40,12 +39,30 @@ for csv_path in csv_files:
         print(f"  Not enough data after cleaning, skipping.")
         continue
 
-    print(f"  After cleaning: {len(df)} snapshots")
-    print(f"  Price range: ${df['mid_price'].min():.2f} - ${df['mid_price'].max():.2f}")
-    print(f"  Avg spread:  {df['spread'].mean()*100:.2f} cents")
+    print(f"  After cleaning : {len(df)} snapshots")
+    print(f"  Price range    : ${df['mid_price'].min():.2f} – ${df['mid_price'].max():.2f}")
+    print(f"  Avg spread     : {df['spread'].mean()*100:.2f} cents")
 
     price_changes = df['mid_price'].diff().fillna(0)
     corr = np.corrcoef(df['ofi'], price_changes)[0, 1]
+
+    fills_path = f"{symbol}_fills.csv"
+    has_fills  = os.path.exists(fills_path)
+    fills_df   = pd.DataFrame()
+
+    if has_fills:
+        fills_df = pd.read_csv(fills_path)
+        fills_df['price'] = fills_df['price'] / 10000
+        fills_df = fills_df[fills_df['price'] > 0].reset_index(drop=True)
+        has_fills = len(fills_df) > 0
+
+    if has_fills:
+        vwap = (fills_df['price'] * fills_df['quantity']).sum() / fills_df['quantity'].sum()
+        print(f"  Total fills    : {len(fills_df)}")
+        print(f"  VWAP           : ${vwap:.2f}")
+    else:
+        vwap = None
+        print(f"  No fills data found.")
 
     summary_rows.append({
         'Symbol':     symbol,
@@ -54,19 +71,24 @@ for csv_path in csv_files:
         'Price High': f"${df['mid_price'].max():.2f}",
         'Avg Spread': f"{df['spread'].mean()*100:.2f}¢",
         'OFI Corr':   f"{corr:.4f}",
+        'VWAP':       f"${vwap:.2f}" if vwap else "N/A",
     })
 
-    fig = plt.figure(figsize=(14, 10))
+    n_rows = 5 if has_fills else 3
+    fig = plt.figure(figsize=(14, n_rows * 3.5))
     fig.suptitle(
         f"{symbol} Order Book Analytics — NASDAQ ITCH 5.0 (Dec 30, 2019)",
-        fontsize=14, fontweight='bold', y=0.98
+        fontsize=14, fontweight='bold', y=0.99
     )
-    gs = gridspec.GridSpec(3, 2, figure=fig, hspace=0.45, wspace=0.35)
+    gs = gridspec.GridSpec(n_rows, 2, figure=fig, hspace=0.55, wspace=0.35)
 
     ax1 = fig.add_subplot(gs[0, :])
     ax1.plot(df.index, df['mid_price'], color='#2196F3', linewidth=0.8, alpha=0.9)
     ax1.fill_between(df.index, df['best_bid'], df['best_ask'],
                      alpha=0.15, color='#2196F3', label='Bid-Ask Range')
+    if vwap:
+        ax1.axhline(y=vwap, color='orange', linestyle='--',
+                    linewidth=1.2, label=f'VWAP: ${vwap:.2f}')
     ax1.set_title('Mid Price Over Time', fontweight='bold')
     ax1.set_ylabel('Price ($)')
     ax1.set_xlabel('Message Snapshot')
@@ -114,6 +136,43 @@ for csv_path in csv_files:
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
     ax5.grid(True, alpha=0.3)
 
+    if has_fills:
+        ax6 = fig.add_subplot(gs[3, 0])
+        max_qty = max(1001, int(fills_df['quantity'].max()) + 1)
+        bins    = [0, 50, 100, 200, 500, 1000, max_qty]
+        labels  = ['1-50', '51-100', '101-200', '201-500', '501-1000', '1000+']
+        fills_df['size_bucket'] = pd.cut(fills_df['quantity'], bins=bins, labels=labels)
+        size_counts = fills_df['size_bucket'].value_counts().reindex(labels, fill_value=0)
+        ax6.bar(size_counts.index, size_counts.values, color='#3F51B5', edgecolor='white')
+        ax6.set_title('Trade Size Distribution', fontweight='bold')
+        ax6.set_xlabel('Trade Size (shares)')
+        ax6.set_ylabel('Number of Trades')
+        ax6.tick_params(axis='x', rotation=30)
+        ax6.grid(axis='y', alpha=0.3)
+
+        ax7 = fig.add_subplot(gs[3, 1])
+        ax7.plot(fills_df.index, fills_df['price'], color='#795548',
+                 linewidth=0.6, alpha=0.8, label='Fill Price')
+        ax7.axhline(y=vwap, color='orange', linestyle='--',
+                    linewidth=1.5, label=f'VWAP: ${vwap:.2f}')
+        ax7.set_title('Fill Prices vs VWAP', fontweight='bold')
+        ax7.set_xlabel('Fill Number')
+        ax7.set_ylabel('Price ($)')
+        ax7.legend(fontsize=9)
+        ax7.grid(True, alpha=0.3)
+
+        ax8 = fig.add_subplot(gs[4, :])
+        bucket_size = max(1, len(fills_df) // 100)
+        fills_df['bucket'] = fills_df.index // bucket_size
+        freq = fills_df.groupby('bucket').size()
+        ax8.bar(freq.index, freq.values, color='#00BCD4',
+                edgecolor='none', width=1.0)
+        ax8.set_title('Trade Frequency Over Time  (U-shaped intraday pattern)',
+                      fontweight='bold')
+        ax8.set_xlabel('Time (bucketed by fill sequence)')
+        ax8.set_ylabel('Trades per Bucket')
+        ax8.grid(axis='y', alpha=0.3)
+
     out_path = f"{symbol}_analytics.png"
     plt.savefig(out_path, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close()
@@ -124,13 +183,15 @@ if summary_rows:
     summary_df = pd.DataFrame(summary_rows)
     print(summary_df.to_string(index=False))
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
     fig.suptitle("Cross-Symbol Comparison — NASDAQ ITCH 5.0 (Dec 30, 2019)",
                  fontsize=13, fontweight='bold')
 
-    symbols   = [r['Symbol']                           for r in summary_rows]
+    symbols   = [r['Symbol']                            for r in summary_rows]
     spreads   = [float(r['Avg Spread'].replace('¢','')) for r in summary_rows]
-    ofi_corrs = [float(r['OFI Corr'])                  for r in summary_rows]
+    ofi_corrs = [float(r['OFI Corr'])                   for r in summary_rows]
+    vwaps     = [float(r['VWAP'].replace('$',''))
+                 if r['VWAP'] != 'N/A' else 0           for r in summary_rows]
 
     colors = ['#2196F3','#4CAF50','#FF9800','#F44336','#9C27B0',
               '#00BCD4','#FF5722','#607D8B','#795548','#E91E63']
@@ -148,6 +209,12 @@ if summary_rows:
     axes[1].set_ylabel('Correlation')
     axes[1].tick_params(axis='x', rotation=45)
     axes[1].grid(axis='y', alpha=0.3)
+
+    axes[2].bar(symbols, vwaps, color=colors)
+    axes[2].set_title('VWAP by Symbol ($)', fontweight='bold')
+    axes[2].set_ylabel('VWAP ($)')
+    axes[2].tick_params(axis='x', rotation=45)
+    axes[2].grid(axis='y', alpha=0.3)
 
     plt.tight_layout()
     plt.savefig("all_symbols_comparison.png", dpi=150,

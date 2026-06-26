@@ -8,6 +8,7 @@
 
 struct SymbolState {
     std::ofstream csv;
+    std::ofstream fills_csv;
     uint64_t      msg_count    = 0;
     double        prev_bid_qty = 0;
     double        prev_ask_qty = 0;
@@ -41,6 +42,7 @@ ReplayStats Replay::run(const std::string& filepath,
     std::unordered_map<std::string, SymbolState> states;
     for (const auto& sym : tracked) {
         auto& s = states[sym];
+
         std::string csv_path = "../analysis/" + sym + "_book_data.csv";
         s.csv.open(csv_path);
         if (!s.csv.is_open()) {
@@ -49,9 +51,17 @@ ReplayStats Replay::run(const std::string& filepath,
         }
         s.csv << "msg_count,best_bid,best_ask,spread,mid_price,"
               << "bid_qty,ask_qty,ofi\n";
+
+        std::string fills_path = "../analysis/" + sym + "_fills.csv";
+        s.fills_csv.open(fills_path);
+        if (!s.fills_csv.is_open()) {
+            std::cerr << "ERROR: Cannot open fills CSV: " << fills_path << "\n";
+            return {};
+        }
+        s.fills_csv << "msg_count,price,quantity\n";
     }
 
-    const uint64_t SNAPSHOT_EVERY = 500;
+    const uint64_t SNAPSHOT_EVERY = 50;
 
     uint8_t len_buf[2];
     uint8_t msg_buf[64];
@@ -106,6 +116,11 @@ ReplayStats Replay::run(const std::string& filepath,
             s.live_orders[msg.order_ref] = order;
             auto fills = s.book.addOrder(order);
             s.stats.total_fills += fills.size();
+            for (const auto& fill : fills) {
+                s.fills_csv << s.msg_count << ","
+                            << fill.price    << ","
+                            << fill.quantity << "\n";
+            }
         }
         else if (type == ITCHMessageType::ORDER_CANCEL) {
             auto msg = ITCHParser::parseCancelOrder(msg_buf);
@@ -163,6 +178,11 @@ ReplayStats Replay::run(const std::string& filepath,
                 s.live_orders[msg.new_order_ref] = new_order;
                 auto fills = s.book.addOrder(new_order);
                 s.stats.total_fills += fills.size();
+                for (const auto& fill : fills) {
+                    s.fills_csv << s.msg_count << ","
+                                << fill.price    << ","
+                                << fill.quantity << "\n";
+                }
                 break;
             }
         }
@@ -210,6 +230,7 @@ ReplayStats Replay::run(const std::string& filepath,
 
     for (auto& [sym, s] : states) {
         s.csv.close();
+        s.fills_csv.close();
         std::cout << sym << ":\n";
         std::cout << "  Add orders : " << s.stats.add_orders     << "\n";
         std::cout << "  Cancels    : " << s.stats.cancel_orders  << "\n";
