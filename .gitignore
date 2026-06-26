@@ -7,5 +7,6 @@ data/
 *.obj
 __pycache__/
 *.pyc
-analysis/book_data.csv
+analysis/.csv
+
 
