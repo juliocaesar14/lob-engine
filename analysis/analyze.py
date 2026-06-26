@@ -23,6 +23,12 @@ for csv_path in csv_files:
     df = pd.read_csv(csv_path)
     print(f"  Loaded {len(df)} snapshots")
 
+    # Fix: divide by 10000 to convert fixed-point integers to dollars
+    df['best_bid']  = df['best_bid']  / 10000
+    df['best_ask']  = df['best_ask']  / 10000
+    df['spread']    = df['spread']    / 10000
+    df['mid_price'] = df['mid_price'] / 10000
+
     df = df.dropna()
     df = df[df['spread'] > 0]
     df = df[df['spread'] < 1.0]
