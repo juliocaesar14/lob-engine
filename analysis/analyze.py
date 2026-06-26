@@ -4,6 +4,8 @@ import matplotlib.gridspec as gridspec
 import numpy as np
 import glob
 import os
+import warnings
+warnings.filterwarnings("ignore",message="Creatng..")
 
 csv_files = sorted(glob.glob("*_book_data.csv"))
 
@@ -161,17 +163,43 @@ for csv_path in csv_files:
         ax7.legend(fontsize=9)
         ax7.grid(True, alpha=0.3)
 
+        # U-shaped trade frequency using msg_count as time proxy
+        # Divide full msg_count range into 50 equal time buckets
         ax8 = fig.add_subplot(gs[4, :])
-        bucket_size = max(1, len(fills_df) // 100)
-        fills_df['bucket'] = fills_df.index // bucket_size
-        freq = fills_df.groupby('bucket').size()
-        ax8.bar(freq.index, freq.values, color='#00BCD4',
-                edgecolor='none', width=1.0)
-        ax8.set_title('Trade Frequency Over Time  (U-shaped intraday pattern)',
+        msg_min = fills_df['msg_count'].min()
+        msg_max = fills_df['msg_count'].max()
+        n_buckets = 50
+        bucket_edges = np.linspace(msg_min, msg_max, n_buckets + 1)
+        fills_df['time_bucket'] = pd.cut(fills_df['msg_count'],
+                                          bins=bucket_edges,
+                                          labels=False,
+                                          include_lowest=True)
+        freq = fills_df.groupby('time_bucket').size().reindex(range(n_buckets), fill_value=0)
+
+        bar_colors = []
+        for i in range(n_buckets):
+            if i < 5 or i >= n_buckets - 5:
+                bar_colors.append('#F44336')  # red for open/close
+            else:
+                bar_colors.append('#00BCD4')  # teal for midday
+
+        ax8.bar(freq.index, freq.values, color=bar_colors, edgecolor='none', width=1.0)
+        ax8.set_title('Trade Frequency Over Time — U-shaped Intraday Pattern\n'
+                      '(Red = Market Open/Close, Teal = Midday)',
                       fontweight='bold')
-        ax8.set_xlabel('Time (bucketed by fill sequence)')
-        ax8.set_ylabel('Trades per Bucket')
+        ax8.set_xlabel('Time Bucket (market open → close)')
+        ax8.set_ylabel('Number of Trades')
         ax8.grid(axis='y', alpha=0.3)
+
+        # Annotate open/close/midday
+        ax8.annotate('Market Open', xy=(2, freq.iloc[2]),
+                     xytext=(6, freq.iloc[2] * 1.05),
+                     fontsize=8, color='#F44336',
+                     arrowprops=dict(arrowstyle='->', color='#F44336'))
+        ax8.annotate('Market Close', xy=(n_buckets - 3, freq.iloc[n_buckets - 3]),
+                     xytext=(n_buckets - 12, freq.iloc[n_buckets - 3] * 1.05),
+                     fontsize=8, color='#F44336',
+                     arrowprops=dict(arrowstyle='->', color='#F44336'))
 
     out_path = f"{symbol}_analytics.png"
     plt.savefig(out_path, dpi=150, bbox_inches='tight', facecolor='white')
@@ -223,4 +251,5 @@ if summary_rows:
     print("\nComparison chart saved -> all_symbols_comparison.png")
 
 print("\nDone.")
+
 
